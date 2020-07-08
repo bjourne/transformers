@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from tensorflow.keras.layers import Dropout, Layer
+from tensorflow.keras.layers import Dropout, Layer, LayerNormalization
 
 
 import logging
@@ -50,7 +50,6 @@ TF_GPT2_PRETRAINED_MODEL_ARCHIVE_LIST = [
     # See all GPT-2 models at https://huggingface.co/models?filter=gpt2
 ]
 
-
 def gelu(x):
     """Gaussian Error Linear Unit.
     This is a smoother version of the RELU.
@@ -64,13 +63,13 @@ def gelu(x):
                                 * (x + 0.044715 * tf.pow(x, 3)))))
     return x * cdf
 
-
 class TFAttention(Layer):
     def __init__(self, nx, n_ctx, config, scale = False, **kwargs):
         super().__init__(**kwargs)
 
         n_state = nx  # in Attention: n_state=768 (nx=n_embd)
-        # [switch nx => n_state from Block to Attention to keep identical to TF implem]
+        # [switch nx => n_state from Block to Attention to keep
+        # identical to TF implem]
         assert n_state % config.n_head == 0
         self.n_ctx = n_ctx
         self.n_head = config.n_head
@@ -101,18 +100,22 @@ class TFAttention(Layer):
         m = i >= j - ns + nd
         return tf.cast(m, dtype)
 
-    def _attn(self, inputs, training=False):
-        q, k, v, attention_mask, head_mask, output_attentions = inputs
+    def _attn(self, inputs, training = False):
         # q, k, v have shape [batch, heads, sequence, features]
+        q, k, v, attention_mask, head_mask, output_attentions = inputs
         w = tf.matmul(q, k, transpose_b=True)
         if self.scale:
-            dk = tf.cast(shape_list(k)[-1], tf.float32)  # scale attention_scores
+            # scale attention_scores
+            dk = tf.cast(shape_list(k)[-1], tf.float32)
             w = w / tf.math.sqrt(dk)
 
-        # w has shape [batch, heads, dst_sequence, src_sequence], where information flows from src to dst.
+        # w has shape [batch, heads, dst_sequence, src_sequence],
+        # where information flows from src to dst.
         _, _, nd, ns = shape_list(w)
-        b = self.causal_attention_mask(nd, ns, dtype=w.dtype)
+        b = self.causal_attention_mask(nd, ns, dtype = w.dtype)
         b = tf.reshape(b, [1, 1, nd, ns])
+
+        # Is it necessary to multiply w with b?
         w = w * b - 1e4 * (1 - b)
 
         if attention_mask is not None:
@@ -139,12 +142,15 @@ class TFAttention(Layer):
 
     def split_heads(self, x):
         x_shape = shape_list(x)
-        new_x_shape = x_shape[:-1] + [self.n_head, x_shape[-1] // self.n_head]
+        new_x_shape = x_shape[:-1] \
+            + [self.n_head, x_shape[-1] // self.n_head]
         x = tf.reshape(x, new_x_shape)
-        return tf.transpose(x, (0, 2, 1, 3))  # (batch, head, seq_length, head_features)
+        # (batch, head, seq_length, head_features)
+        return tf.transpose(x, (0, 2, 1, 3))
 
     def call(self, inputs, training=False):
-        x, layer_past, attention_mask, head_mask, use_cache, output_attentions = inputs
+        x, layer_past, attention_mask, head_mask, \
+            use_cache, output_attentions = inputs
 
         x = self.c_attn(x)
         query, key, value = tf.split(x, 3, axis=2)
@@ -152,7 +158,7 @@ class TFAttention(Layer):
         key = self.split_heads(key)
         value = self.split_heads(value)
         if layer_past is not None:
-            past_key, past_value = tf.unstack(layer_past, axis=0)
+            past_key, past_value = tf.unstack(layer_past, axis = 0)
             key = tf.concat([past_key, key], axis=-2)
             value = tf.concat([past_value, value], axis=-2)
 
@@ -162,7 +168,10 @@ class TFAttention(Layer):
         else:
             present = (None,)
 
-        attn_outputs = self._attn([query, key, value, attention_mask, head_mask, output_attentions], training=training)
+        attn_outputs = self._attn([query, key, value,
+                                   attention_mask, head_mask,
+                                   output_attentions],
+                                  training = training)
         a = attn_outputs[0]
 
         a = self.merge_heads(a)
@@ -173,39 +182,62 @@ class TFAttention(Layer):
         return outputs  # a, present, (attentions)
 
 
-class TFMLP(tf.keras.layers.Layer):
+class TFMLP(Layer):
     def __init__(self, n_state, config, **kwargs):
         super().__init__(**kwargs)
         nx = config.n_embd
-        self.c_fc = TFConv1D(n_state, nx, initializer_range=config.initializer_range, name="c_fc")
-        self.c_proj = TFConv1D(nx, n_state, initializer_range=config.initializer_range, name="c_proj")
+        self.c_fc = TFConv1D(
+            n_state, nx,
+            initializer_range = config.initializer_range,
+            name = "c_fc")
+        self.c_proj = TFConv1D(
+            nx, n_state,
+            initializer_range = config.initializer_range,
+            name = "c_proj")
         self.act = gelu
-        self.dropout = tf.keras.layers.Dropout(config.resid_pdrop)
+        self.dropout = Dropout(config.resid_pdrop)
 
-    def call(self, x, training=False):
+    def call(self, x, training = False):
         h = self.act(self.c_fc(x))
         h2 = self.c_proj(h)
-        h2 = self.dropout(h2, training=training)
+        h2 = self.dropout(h2, training = training)
         return h2
 
 
-class TFBlock(tf.keras.layers.Layer):
+class TFBlock(Layer):
     def __init__(self, n_ctx, config, scale=False, **kwargs):
         super().__init__(**kwargs)
         nx = config.n_embd
-        self.ln_1 = tf.keras.layers.LayerNormalization(epsilon=config.layer_norm_epsilon, name="ln_1")
-        self.attn = TFAttention(nx, n_ctx, config, scale, name="attn")
-        self.ln_2 = tf.keras.layers.LayerNormalization(epsilon=config.layer_norm_epsilon, name="ln_2")
+        self.ln_1 = LayerNormalization(
+            epsilon=config.layer_norm_epsilon,
+            name="ln_1")
+        self.attn = TFAttention(nx, n_ctx, config, scale, name = "attn")
+        self.ln_2 = LayerNormalization(
+            epsilon=config.layer_norm_epsilon,
+            name="ln_2")
         self.mlp = TFMLP(4 * nx, config, name="mlp")
 
-    def call(self, inputs, training=False):
-        x, layer_past, attention_mask, head_mask, use_cache, output_attentions = inputs
+    def call(self, inputs, training = False):
+        '''
+        0. Input
+        1. LayerNormalization
+        2. MultiheadAttention
+        3. 0 + 2
+        4. LayerNormalization
+        5. MLP
+        6. 3 + 5
+        '''
+        x, layer_past, attention_mask, head_mask, use_cache, \
+            output_attentions = inputs
 
         a = self.ln_1(x)
         output_attn = self.attn(
-            [a, layer_past, attention_mask, head_mask, use_cache, output_attentions], training=training
+            [a, layer_past, attention_mask, head_mask,
+             use_cache, output_attentions],
+            training = training
         )
-        a = output_attn[0]  # output_attn: a, present, (attentions)
+        # output_attn: a, present, (attentions)
+        a = output_attn[0]
         x = x + a
 
         m = self.ln_2(x)
@@ -213,11 +245,11 @@ class TFBlock(tf.keras.layers.Layer):
         x = x + m
 
         outputs = [x] + output_attn[1:]
-        return outputs  # x, present, (attentions)
-
+        # x, present, (attentions)
+        return outputs
 
 @keras_serializable
-class TFGPT2MainLayer(tf.keras.layers.Layer):
+class TFGPT2MainLayer(Layer):
     config_class = GPT2Config
 
     def __init__(self, config, *inputs, **kwargs):
@@ -231,17 +263,26 @@ class TFGPT2MainLayer(tf.keras.layers.Layer):
         self.n_embd = config.n_embd
 
         self.wte = TFSharedEmbeddings(
-            config.vocab_size, config.hidden_size, initializer_range=config.initializer_range, name="wte"
+            config.vocab_size,
+            config.hidden_size,
+            initializer_range = config.initializer_range,
+            name = "wte"
         )
+        embeddings_initializer = get_initializer(config.initializer_range)
         self.wpe = tf.keras.layers.Embedding(
             config.n_positions,
             config.n_embd,
-            embeddings_initializer=get_initializer(config.initializer_range),
+            embeddings_initializer = embeddings_initializer,
             name="wpe",
         )
-        self.drop = tf.keras.layers.Dropout(config.embd_pdrop)
-        self.h = [TFBlock(config.n_ctx, config, scale=True, name="h_._{}".format(i)) for i in range(config.n_layer)]
-        self.ln_f = tf.keras.layers.LayerNormalization(epsilon=config.layer_norm_epsilon, name="ln_f")
+        self.drop = Dropout(config.embd_pdrop)
+        self.h = [TFBlock(config.n_ctx,
+                          config,
+                          scale = True, name = "h_._{}".format(i))
+                  for i in range(config.n_layer)]
+        self.ln_f = LayerNormalization(
+            epsilon = config.layer_norm_epsilon,
+            name = "ln_f")
 
     def get_input_embeddings(self):
         return self.wte
@@ -259,22 +300,25 @@ class TFGPT2MainLayer(tf.keras.layers.Layer):
     def call(
         self,
         inputs,
-        past=None,
-        attention_mask=None,
-        token_type_ids=None,
-        position_ids=None,
-        head_mask=None,
-        inputs_embeds=None,
-        use_cache=None,
-        output_attentions=None,
-        output_hidden_states=None,
-        training=False,
+        past = None,
+        attention_mask = None,
+        token_type_ids = None,
+        position_ids = None,
+        head_mask = None,
+        inputs_embeds = None,
+        use_cache = None,
+        output_attentions = None,
+        output_hidden_states = None,
+        training = False,
     ):
         if isinstance(inputs, (tuple, list)):
             input_ids = inputs[0]
             past = inputs[1] if len(inputs) > 1 else past
-            attention_mask = inputs[2] if len(inputs) > 2 else attention_mask
-            token_type_ids = inputs[3] if len(inputs) > 3 else token_type_ids
+
+            if len(inputs) > 2:
+                attention_mask = inputs[2]
+            if len(inputs) > 3:
+                token_type_ids = inputs[3]
             position_ids = inputs[4] if len(inputs) > 4 else position_ids
             head_mask = inputs[5] if len(inputs) > 5 else head_mask
             inputs_embeds = inputs[6] if len(inputs) > 6 else inputs_embeds
@@ -297,7 +341,8 @@ class TFGPT2MainLayer(tf.keras.layers.Layer):
         else:
             input_ids = inputs
 
-        output_attentions = output_attentions if output_attentions is not None else self.output_attentions
+        if output_attentions is None:
+            output_attentions = self.output_attentions
         output_hidden_states = output_hidden_states if output_hidden_states is not None else self.output_hidden_states
         use_cache = use_cache if use_cache is not None else self.use_cache
 
@@ -412,126 +457,16 @@ class TFGPT2PreTrainedModel(TFPreTrainedModel):
     base_model_prefix = "transformer"
 
 
-GPT2_START_DOCSTRING = r"""
-
-    .. note::
-        TF 2.0 models accepts two formats as inputs:
-
-            - having all inputs as keyword arguments (like PyTorch models), or
-            - having all inputs as a list, tuple or dict in the first positional arguments.
-
-        This second option is useful when using :obj:`tf.keras.Model.fit()` method which currently requires having
-        all the tensors in the first argument of the model call function: :obj:`model(inputs)`.
-
-        If you choose this second option, there are three possibilities you can use to gather all the input Tensors
-        in the first positional argument :
-
-        - a single Tensor with input_ids only and nothing else: :obj:`model(inputs_ids)`
-        - a list of varying length with one or several input Tensors IN THE ORDER given in the docstring:
-          :obj:`model([input_ids, attention_mask])` or :obj:`model([input_ids, attention_mask, token_type_ids])`
-        - a dictionary with one or several input Tensors associated to the input names given in the docstring:
-          :obj:`model({'input_ids': input_ids, 'token_type_ids': token_type_ids})`
-
-    Parameters:
-        config (:class:`~transformers.GPT2Config`): Model configuration class with all the parameters of the model.
-            Initializing with a config file does not load the weights associated with the model, only the configuration.
-            Check out the :meth:`~transformers.PreTrainedModel.from_pretrained` method to load the model weights.
-"""
-
-GPT2_INPUTS_DOCSTRING = r"""
-    Args:
-        input_ids (:obj:`Numpy array` or :obj:`tf.Tensor` of shape :obj:`(batch_size, input_ids_length)`):
-            :obj:`input_ids_length` = ``sequence_length`` if ``past`` is ``None`` else ``past[0].shape[-2]`` (``sequence_length`` of input past key value states).
-            Indices of input sequence tokens in the vocabulary.
-
-            If `past` is used, only `input_ids` that do not have their past calculated should be passed as `input_ids`.
-
-            Indices can be obtained using :class:`transformers.GPT2Tokenizer`.
-            See :func:`transformers.PreTrainedTokenizer.encode` and
-            :func:`transformers.PreTrainedTokenizer.__call__` for details.
-
-            `What are input IDs? <../glossary.html#input-ids>`__
-        past (:obj:`List[tf.Tensor]` of length :obj:`config.n_layers`):
-            Contains pre-computed hidden-states (key and values in the attention blocks) as computed by the model
-            (see `past` output below). Can be used to speed up sequential decoding.
-            The token ids which have their past given to this model
-            should not be passed as `input_ids` as they have already been computed.
-        attention_mask (:obj:`tf.Tensor` or :obj:`Numpy array` of shape :obj:`(batch_size, sequence_length)`, `optional`, defaults to :obj:`None`):
-            Mask to avoid performing attention on padding token indices.
-            Mask values selected in ``[0, 1]``:
-            ``1`` for tokens that are NOT MASKED, ``0`` for MASKED tokens.
-
-            `What are attention masks? <../glossary.html#attention-mask>`__
-        token_type_ids (:obj:`tf.Tensor` or :obj:`Numpy array` of shape :obj:`(batch_size, sequence_length)`, `optional`, defaults to :obj:`None`):
-            Segment token indices to indicate first and second portions of the inputs.
-            Indices are selected in ``[0, 1]``: ``0`` corresponds to a `sentence A` token, ``1``
-            corresponds to a `sentence B` token
-
-            `What are token type IDs? <../glossary.html#token-type-ids>`_
-        position_ids (:obj:`tf.Tensor` or :obj:`Numpy array` of shape :obj:`(batch_size, sequence_length)`, `optional`, defaults to :obj:`None`):
-            Indices of positions of each input sequence tokens in the position embeddings.
-            Selected in the range ``[0, config.max_position_embeddings - 1]``.
-
-            `What are position IDs? <../glossary.html#position-ids>`_
-        head_mask (:obj:`tf.Tensor` or :obj:`Numpy array` of shape :obj:`(num_heads,)` or :obj:`(num_layers, num_heads)`, `optional`, defaults to :obj:`None`):
-            Mask to nullify selected heads of the self-attention modules.
-            Mask values selected in ``[0, 1]``:
-            :obj:`1` indicates the head is **not masked**, :obj:`0` indicates the head is **masked**.
-        inputs_embeds (:obj:`tf.Tensor` or :obj:`Numpy array` of shape :obj:`(batch_size, sequence_length, hidden_size)`, `optional`, defaults to :obj:`None`):
-            Optionally, instead of passing :obj:`input_ids` you can choose to directly pass an embedded representation.
-            This is useful if you want more control over how to convert `input_ids` indices into associated vectors
-            than the model's internal embedding lookup matrix.
-        training (:obj:`boolean`, `optional`, defaults to :obj:`False`):
-            Whether to activate dropout modules (if set to :obj:`True`) during training or to de-activate them
-            (if set to :obj:`False`) for evaluation.
-        output_attentions (:obj:`bool`, `optional`, defaults to :obj:`None`):
-            If set to ``True``, the attentions tensors of all attention layers are returned. See ``attentions`` under returned tensors for more detail.
-"""
-
-
-@add_start_docstrings(
-    "The bare GPT2 Model transformer outputing raw hidden-states without any specific head on top.",
-    GPT2_START_DOCSTRING,
-)
 class TFGPT2Model(TFGPT2PreTrainedModel):
     def __init__(self, config, *inputs, **kwargs):
         super().__init__(config, *inputs, **kwargs)
-        self.transformer = TFGPT2MainLayer(config, name="transformer")
+        self.transformer = TFGPT2MainLayer(config, name = "transformer")
 
-    @add_start_docstrings_to_callable(GPT2_INPUTS_DOCSTRING)
-    @add_code_sample_docstrings(tokenizer_class=_TOKENIZER_FOR_DOC, checkpoint="gpt2")
     def call(self, inputs, **kwargs):
-        r"""
-    Return:
-        :obj:`tuple(tf.Tensor)` comprising various elements depending on the configuration (:class:`~transformers.GPT2Config`) and inputs:
-        last_hidden_state (:obj:`tf.Tensor` of shape :obj:`(batch_size, sequence_length, hidden_size)`):
-            Sequence of hidden-states at the last layer of the model.
-        past (:obj:`List[tf.Tensor]` of length :obj:`config.n_layers` with each tensor of shape :obj:`(2, batch_size, num_heads, sequence_length, embed_size_per_head)`):
-            Contains pre-computed hidden-states (key and values in the attention blocks).
-            Can be used (see `past` input) to speed up sequential decoding. The token ids which have their past given to this model
-            should not be passed as input ids as they have already been computed.
-        hidden_states (:obj:`tuple(tf.Tensor)`, `optional`, returned when ``output_hidden_states=True`` is passed or when ``config.output_hidden_states=True``):
-            tuple of :obj:`tf.Tensor` (one for the output of the embeddings + one for the output of each layer)
-            of shape :obj:`(batch_size, sequence_length, hidden_size)`.
+        return self.transformer(inputs, **kwargs)
 
-            Hidden-states of the model at the output of each layer plus the initial embedding outputs.
-        attentions (:obj:`tuple(tf.Tensor)`, `optional`, returned when ``output_attentions=True`` is passed or when ``config.output_attentions=True``):
-            tuple of :obj:`tf.Tensor` (one for each layer) of shape
-            :obj:`(batch_size, num_heads, sequence_length, sequence_length)`:
-
-            Attentions weights after the attention softmax, used to compute the weighted average in the self-attention
-            heads.
-    """
-        outputs = self.transformer(inputs, **kwargs)
-        return outputs
-
-
-@add_start_docstrings(
-    """The GPT2 Model transformer with a language modeling head on top
-    (linear layer with weights tied to the input embeddings). """,
-    GPT2_START_DOCSTRING,
-)
-class TFGPT2LMHeadModel(TFGPT2PreTrainedModel, TFCausalLanguageModelingLoss):
+class TFGPT2LMHeadModel(TFGPT2PreTrainedModel,
+                        TFCausalLanguageModelingLoss):
     def __init__(self, config, *inputs, **kwargs):
         super().__init__(config, *inputs, **kwargs)
         self.transformer = TFGPT2MainLayer(config, name="transformer")
@@ -544,10 +479,10 @@ class TFGPT2LMHeadModel(TFGPT2PreTrainedModel, TFCausalLanguageModelingLoss):
         if past:
             inputs = tf.expand_dims(inputs[:, -1], -1)
 
-        return {"inputs": inputs, "past": past, "use_cache": kwargs["use_cache"]}
+        return {"inputs": inputs,
+                "past": past,
+                "use_cache": kwargs["use_cache"]}
 
-    @add_start_docstrings_to_callable(GPT2_INPUTS_DOCSTRING)
-    @add_code_sample_docstrings(tokenizer_class=_TOKENIZER_FOR_DOC, checkpoint="gpt2")
     def call(
         self,
         inputs,

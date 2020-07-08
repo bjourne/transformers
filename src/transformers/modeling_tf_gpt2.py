@@ -13,7 +13,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" TF 2.0 OpenAI GPT-2 model. """
+
+from tensorflow.keras.layers import Dropout, Layer
 
 
 import logging
@@ -35,7 +36,6 @@ from .modeling_tf_utils import (
     shape_list,
 )
 from .tokenization_utils import BatchEncoding
-
 
 logger = logging.getLogger(__name__)
 
@@ -60,12 +60,13 @@ def gelu(x):
     Returns:
         `x` with the GELU activation applied.
     """
-    cdf = 0.5 * (1.0 + tf.tanh((np.sqrt(2 / np.pi) * (x + 0.044715 * tf.pow(x, 3)))))
+    cdf = 0.5 * (1.0 + tf.tanh((np.sqrt(2 / np.pi)
+                                * (x + 0.044715 * tf.pow(x, 3)))))
     return x * cdf
 
 
-class TFAttention(tf.keras.layers.Layer):
-    def __init__(self, nx, n_ctx, config, scale=False, **kwargs):
+class TFAttention(Layer):
+    def __init__(self, nx, n_ctx, config, scale = False, **kwargs):
         super().__init__(**kwargs)
 
         n_state = nx  # in Attention: n_state=768 (nx=n_embd)
@@ -76,10 +77,14 @@ class TFAttention(tf.keras.layers.Layer):
         self.split_size = n_state
         self.scale = scale
 
-        self.c_attn = TFConv1D(n_state * 3, nx, initializer_range=config.initializer_range, name="c_attn")
-        self.c_proj = TFConv1D(n_state, nx, initializer_range=config.initializer_range, name="c_proj")
-        self.attn_dropout = tf.keras.layers.Dropout(config.attn_pdrop)
-        self.resid_dropout = tf.keras.layers.Dropout(config.resid_pdrop)
+        self.c_attn = TFConv1D(
+            n_state * 3, nx,
+            initializer_range=config.initializer_range, name="c_attn")
+        self.c_proj = TFConv1D(
+            n_state, nx,
+            initializer_range=config.initializer_range, name="c_proj")
+        self.attn_dropout = Dropout(config.attn_pdrop)
+        self.resid_dropout = Dropout(config.resid_pdrop)
         self.pruned_heads = set()
 
     def prune_heads(self, heads):
@@ -87,8 +92,9 @@ class TFAttention(tf.keras.layers.Layer):
 
     @staticmethod
     def causal_attention_mask(nd, ns, dtype):
-        """1's in the lower triangle, counting from the lower right corner.
-        Same as tf.matrix_band_part(tf.ones([nd, ns]), -1, ns-nd), but doesn't produce garbage on TPUs.
+        """1's in the lower triangle, counting from the lower right
+        corner. Same as tf.matrix_band_part(tf.ones([nd, ns]), -1, ns-nd),
+        but doesn't produce garbage on TPUs.
         """
         i = tf.range(nd)[:, None]
         j = tf.range(ns)

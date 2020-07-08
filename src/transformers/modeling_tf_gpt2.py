@@ -14,7 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from tensorflow.keras.layers import Dropout, Layer, LayerNormalization
+from tensorflow.keras.layers import (Dropout, Embedding,
+                                     Layer, LayerNormalization)
 
 
 import logging
@@ -148,27 +149,27 @@ class TFAttention(Layer):
         # (batch, head, seq_length, head_features)
         return tf.transpose(x, (0, 2, 1, 3))
 
-    def call(self, inputs, training=False):
+    def call(self, inputs, training = False):
         x, layer_past, attention_mask, head_mask, \
             use_cache, output_attentions = inputs
 
         x = self.c_attn(x)
-        query, key, value = tf.split(x, 3, axis=2)
-        query = self.split_heads(query)
-        key = self.split_heads(key)
+        q, k, value = tf.split(x, 3, axis=2)
+        q = self.split_heads(q)
+        k = self.split_heads(k)
         value = self.split_heads(value)
         if layer_past is not None:
-            past_key, past_value = tf.unstack(layer_past, axis = 0)
-            key = tf.concat([past_key, key], axis=-2)
+            past_k, past_value = tf.unstack(layer_past, axis = 0)
+            k = tf.concat([past_k, k], axis=-2)
             value = tf.concat([past_value, value], axis=-2)
 
         # to cope with keras serialization
         if cast_bool_to_primitive(use_cache, True) is True:
-            present = tf.stack([key, value], axis=0)
+            present = tf.stack([k, value], axis = 0)
         else:
             present = (None,)
 
-        attn_outputs = self._attn([query, key, value,
+        attn_outputs = self._attn([q, k, value,
                                    attention_mask, head_mask,
                                    output_attentions],
                                   training = training)
@@ -248,7 +249,6 @@ class TFBlock(Layer):
         # x, present, (attentions)
         return outputs
 
-@keras_serializable
 class TFGPT2MainLayer(Layer):
     config_class = GPT2Config
 
@@ -262,18 +262,19 @@ class TFGPT2MainLayer(Layer):
         self.vocab_size = config.vocab_size
         self.n_embd = config.n_embd
 
+        initializer_range = config.initializer_range
         self.wte = TFSharedEmbeddings(
             config.vocab_size,
             config.hidden_size,
-            initializer_range = config.initializer_range,
+            initializer_range = initializer_range,
             name = "wte"
         )
-        embeddings_initializer = get_initializer(config.initializer_range)
-        self.wpe = tf.keras.layers.Embedding(
+        embeddings_initializer = get_initializer(initializer_range)
+        self.wpe = Embedding(
             config.n_positions,
             config.n_embd,
             embeddings_initializer = embeddings_initializer,
-            name="wpe",
+            name = "wpe",
         )
         self.drop = Dropout(config.embd_pdrop)
         self.h = [TFBlock(config.n_ctx,
@@ -291,12 +292,6 @@ class TFGPT2MainLayer(Layer):
         self.wte.weight = value
         self.wte.vocab_size = self.wte.weight.shape[0]
 
-    def _prune_heads(self, heads_to_prune):
-        """ Prunes heads of the model.
-            heads_to_prune: dict of {layer_num: list of heads to prune in this layer}
-        """
-        raise NotImplementedError
-
     def call(
         self,
         inputs,
@@ -311,7 +306,9 @@ class TFGPT2MainLayer(Layer):
         output_hidden_states = None,
         training = False,
     ):
+        print('inputs are', inputs)
         if isinstance(inputs, (tuple, list)):
+            print('list type')
             input_ids = inputs[0]
             past = inputs[1] if len(inputs) > 1 else past
 
@@ -319,8 +316,10 @@ class TFGPT2MainLayer(Layer):
                 attention_mask = inputs[2]
             if len(inputs) > 3:
                 token_type_ids = inputs[3]
-            position_ids = inputs[4] if len(inputs) > 4 else position_ids
-            head_mask = inputs[5] if len(inputs) > 5 else head_mask
+            if len(inputs) > 4:
+                position_ids = inputs[4]
+            if len(inputs) > 5:
+                head_mask = inputs[5]
             inputs_embeds = inputs[6] if len(inputs) > 6 else inputs_embeds
             use_cache = inputs[7] if len(inputs) > 7 else use_cache
             output_attentions = inputs[8] if len(inputs) > 8 else output_attentions
@@ -339,15 +338,22 @@ class TFGPT2MainLayer(Layer):
             output_hidden_states = inputs.get("output_hidden_states", output_hidden_states)
             assert len(inputs) <= 10, "Too many inputs."
         else:
+            print('normal stuff')
             input_ids = inputs
 
         if output_attentions is None:
             output_attentions = self.output_attentions
-        output_hidden_states = output_hidden_states if output_hidden_states is not None else self.output_hidden_states
-        use_cache = use_cache if use_cache is not None else self.use_cache
+
+        if output_hidden_states is None:
+            output_hidden_states = self.output_hidden_states
+
+        if use_cache is None:
+            use_cache = self.use_cache
 
         if input_ids is not None and inputs_embeds is not None:
-            raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
+            raise ValueError(
+                "You cannot specify both input_ids and "
+                "inputs_embeds at the same time")
         elif input_ids is not None:
             input_shape = shape_list(input_ids)
             input_ids = tf.reshape(input_ids, [-1, input_shape[-1]])
@@ -367,15 +373,18 @@ class TFGPT2MainLayer(Layer):
         if attention_mask is not None:
             # We create a 3D attention mask from a 2D tensor mask.
             # Sizes are [batch_size, 1, 1, to_seq_length]
-            # So we can broadcast to [batch_size, num_heads, from_seq_length, to_seq_length]
-            # this attention mask is more simple than the triangular masking of causal attention
-            # used in OpenAI GPT, we just need to prepare the broadcast dimension here.
+            # So we can broadcast to [batch_size, num_heads,
+            # from_seq_length, to_seq_length] this attention mask is
+            # more simple than the triangular masking of causal
+            # attention used in OpenAI GPT, we just need to prepare
+            # the broadcast dimension here.
             attention_mask = attention_mask[:, tf.newaxis, tf.newaxis, :]
 
-            # Since attention_mask is 1.0 for positions we want to attend and 0.0 for
-            # masked positions, this operation will create a tensor which is 0.0 for
-            # positions we want to attend and -10000.0 for masked positions.
-            # Since we are adding it to the raw scores before the softmax, this is
+            # Since attention_mask is 1.0 for positions we want to
+            # attend and 0.0 for masked positions, this operation will
+            # create a tensor which is 0.0 for positions we want to
+            # attend and -10000.0 for masked positions.  Since we are
+            # adding it to the raw scores before the softmax, this is
             # effectively the same as removing these entirely.
 
             attention_mask = tf.cast(attention_mask, tf.float32)
@@ -397,13 +406,15 @@ class TFGPT2MainLayer(Layer):
         position_ids = tf.reshape(position_ids, [-1, shape_list(position_ids)[-1]])
 
         if inputs_embeds is None:
-            inputs_embeds = self.wte(input_ids, mode="embedding")
+            inputs_embeds = self.wte(input_ids, mode = "embedding")
         position_embeds = self.wpe(position_ids)
+
+        token_type_embeds = 0
         if token_type_ids is not None:
-            token_type_ids = tf.reshape(token_type_ids, [-1, shape_list(token_type_ids)[-1]])
+            shape = [-1, shape_list(token_type_ids)[-1]]
+            token_type_ids = tf.reshape(token_type_ids, shape)
             token_type_embeds = self.wte(token_type_ids, mode="embedding")
-        else:
-            token_type_embeds = 0
+
         hidden_states = inputs_embeds + position_embeds + token_type_embeds
         hidden_states = self.drop(hidden_states, training=training)
 
@@ -469,7 +480,7 @@ class TFGPT2LMHeadModel(TFGPT2PreTrainedModel,
                         TFCausalLanguageModelingLoss):
     def __init__(self, config, *inputs, **kwargs):
         super().__init__(config, *inputs, **kwargs)
-        self.transformer = TFGPT2MainLayer(config, name="transformer")
+        self.transformer = TFGPT2MainLayer(config, name = "transformer")
 
     def get_output_embeddings(self):
         return self.transformer.wte
@@ -486,13 +497,13 @@ class TFGPT2LMHeadModel(TFGPT2PreTrainedModel,
     def call(
         self,
         inputs,
-        past=None,
-        attention_mask=None,
-        token_type_ids=None,
-        position_ids=None,
-        head_mask=None,
-        inputs_embeds=None,
-        use_cache=None,
+        past = None,
+        attention_mask = None,
+        token_type_ids = None,
+        position_ids = None,
+        head_mask = None,
+        inputs_embeds = None,
+        use_cache = None,
         output_attentions=None,
         output_hidden_states=None,
         labels=None,
@@ -532,16 +543,16 @@ class TFGPT2LMHeadModel(TFGPT2PreTrainedModel,
 
         transformer_outputs = self.transformer(
             inputs,
-            past=past,
-            attention_mask=attention_mask,
-            token_type_ids=token_type_ids,
-            position_ids=position_ids,
-            head_mask=head_mask,
-            inputs_embeds=inputs_embeds,
-            use_cache=use_cache,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            training=training,
+            past = past,
+            attention_mask = attention_mask,
+            token_type_ids = token_type_ids,
+            position_ids = position_ids,
+            head_mask = head_mask,
+            inputs_embeds = inputs_embeds,
+            use_cache = use_cache,
+            output_attentions = output_attentions,
+            output_hidden_states = output_hidden_states,
+            training = training,
         )
 
         hidden_states = transformer_outputs[0]
@@ -556,17 +567,9 @@ class TFGPT2LMHeadModel(TFGPT2PreTrainedModel,
             loss = self.compute_loss(labels, logits)
             outputs = (loss,) + outputs
 
-        return outputs  # lm_logits, presents, (all hidden_states), (attentions)
+        # lm_logits, presents, (all hidden_states), (attentions)
+        return outputs
 
-
-@add_start_docstrings(
-    """The GPT2 Model transformer with a language modeling and a multiple-choice classification
-    head on top e.g. for RocStories/SWAG tasks. The two heads are two linear layers.
-    The language modeling head has its weights tied to the input embeddings,
-    the classification head takes as input the input of a specified classification token index in the input sequence).
-""",
-    GPT2_START_DOCSTRING,
-)
 class TFGPT2DoubleHeadsModel(TFGPT2PreTrainedModel):
     def __init__(self, config, *inputs, **kwargs):
         super().__init__(config, *inputs, **kwargs)
@@ -579,7 +582,6 @@ class TFGPT2DoubleHeadsModel(TFGPT2PreTrainedModel):
     def get_output_embeddings(self):
         return self.transformer.wte
 
-    @add_start_docstrings_to_callable(GPT2_INPUTS_DOCSTRING)
     def call(
         self,
         inputs,

@@ -1746,9 +1746,9 @@ def pipeline(
     model: Optional = None,
     config: Optional[Union[str, PretrainedConfig]] = None,
     tokenizer: Optional[Union[str, PreTrainedTokenizer]] = None,
-    framework: Optional[str] = None,
+    framework = None,
     **kwargs
-) -> Pipeline:
+):
     """
     Utility factory method to build a pipeline.
 

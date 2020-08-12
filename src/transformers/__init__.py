@@ -237,7 +237,6 @@ if is_torch_available():
         OpenAIGPTPreTrainedModel,
         OpenAIGPTModel,
         OpenAIGPTLMHeadModel,
-        OpenAIGPTDoubleHeadsModel,
         load_tf_weights_in_openai_gpt,
         OPENAI_GPT_PRETRAINED_MODEL_ARCHIVE_LIST,
     )
@@ -253,7 +252,6 @@ if is_torch_available():
         GPT2PreTrainedModel,
         GPT2Model,
         GPT2LMHeadModel,
-        GPT2DoubleHeadsModel,
         load_tf_weights_in_gpt2,
         GPT2_PRETRAINED_MODEL_ARCHIVE_LIST,
     )
@@ -548,7 +546,6 @@ if is_tf_available():
 
     from .modeling_tf_gpt2 import (
         TF_GPT2_PRETRAINED_MODEL_ARCHIVE_LIST,
-        TFGPT2DoubleHeadsModel,
         TFGPT2LMHeadModel,
         TFGPT2MainLayer,
         TFGPT2Model,
@@ -571,7 +568,6 @@ if is_tf_available():
 
     from .modeling_tf_openai import (
         TF_OPENAI_GPT_PRETRAINED_MODEL_ARCHIVE_LIST,
-        TFOpenAIGPTDoubleHeadsModel,
         TFOpenAIGPTLMHeadModel,
         TFOpenAIGPTMainLayer,
         TFOpenAIGPTModel,

@@ -22,6 +22,7 @@ import warnings
 import h5py
 import numpy as np
 import tensorflow as tf
+from tensorflow.keras import Model
 from tensorflow.python.keras.saving import hdf5_format
 
 from .configuration_utils import PretrainedConfig
@@ -166,22 +167,7 @@ TFMultipleChoiceLoss = TFSequenceClassificationLoss
 TFMaskedLanguageModelingLoss = TFCausalLanguageModelingLoss
 
 
-class TFPreTrainedModel(tf.keras.Model, TFModelUtilsMixin, TFGenerationMixin):
-    r""" Base class for all TF models.
-
-        :class:`~transformers.TFPreTrainedModel` takes care of storing the configuration of the models and handles methods for loading/downloading/saving models
-        as well as a few methods common to all models to (i) resize the input embeddings and (ii) prune heads in the self-attention heads.
-
-        Class attributes (overridden by derived classes):
-            - ``config_class``: a class derived from :class:`~transformers.PretrainedConfig` to use as configuration class for this model architecture.
-            - ``load_tf_weights``: a python ``method`` for loading a TensorFlow checkpoint in a PyTorch model, taking as arguments:
-
-                - ``model``: an instance of the relevant subclass of :class:`~transformers.PreTrainedModel`,
-                - ``config``: an instance of the relevant subclass of :class:`~transformers.PretrainedConfig`,
-                - ``path``: a path (string) to the TensorFlow checkpoint.
-
-            - ``base_model_prefix``: a string indicating the attribute associated to the base model in derived classes of the same architecture adding modules on top of the base model.
-    """
+class TFPreTrainedModel(Model, TFModelUtilsMixin, TFGenerationMixin):
     config_class = None
     base_model_prefix = ""
 
@@ -352,70 +338,119 @@ class TFPreTrainedModel(tf.keras.Model, TFModelUtilsMixin, TFGenerationMixin):
 
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
-        r"""Instantiate a pretrained TF 2.0 model from a pre-trained model configuration.
 
-        The warning ``Weights from XXX not initialized from pretrained model`` means that the weights of XXX do not come pre-trained with the rest of the model.
-        It is up to you to train those weights with a downstream fine-tuning task.
+        r"""Instantiate a pretrained TF 2.0 model from a pre-trained model
+        configuration.
 
-        The warning ``Weights from XXX not used in YYY`` means that the layer XXX is not used by YYY, therefore those weights are discarded.
+        The warning ``Weights from XXX not initialized from pretrained
+        model`` means that the weights of XXX do not come pre-trained
+        with the rest of the model.  It is up to you to train those
+        weights with a downstream fine-tuning task.
+
+        The warning ``Weights from XXX not used in YYY`` means that
+        the layer XXX is not used by YYY, therefore those weights are
+        discarded.
 
         Parameters:
             pretrained_model_name_or_path: either:
-                - a string with the `shortcut name` of a pre-trained model to load from cache or download, e.g.: ``bert-base-uncased``.
-                - a string with the `identifier name` of a pre-trained model that was user-uploaded to our S3, e.g.: ``dbmdz/bert-base-german-cased``.
-                - a path to a `directory` containing model weights saved using :func:`~transformers.PreTrainedModel.save_pretrained`, e.g.: ``./my_model_directory/``.
-                - a path or url to a `PyTorch state_dict save file` (e.g. `./pt_model/pytorch_model.bin`). In this case, ``from_pt`` should be set to True and a configuration object should be provided as ``config`` argument. This loading path is slower than converting the PyTorch checkpoint in a TensorFlow model using the provided conversion scripts and loading the TensorFlow model afterwards.
+                - a string with the `shortcut name` of a pre-trained
+                  model to load from cache or download, e.g.:
+                  ``bert-base-uncased``.
+                - a string with the `identifier name` of a pre-trained
+                  model that was user-uploaded to our S3, e.g.:
+                  ``dbmdz/bert-base-german-cased``.
+                - a path to a `directory` containing model weights
+                  saved using
+                  :func:`~transformers.PreTrainedModel.save_pretrained`,
+                  e.g.: ``./my_model_directory/``.
+                - a path or url to a `PyTorch state_dict save file`
+                  (e.g. `./pt_model/pytorch_model.bin`). In this case,
+                  ``from_pt`` should be set to True and a
+                  configuration object should be provided as
+                  ``config`` argument. This loading path is slower
+                  than converting the PyTorch checkpoint in a
+                  TensorFlow model using the provided conversion
+                  scripts and loading the TensorFlow model afterwards.
 
             model_args: (`optional`) Sequence of positional arguments:
-                All remaning positional arguments will be passed to the underlying model's ``__init__`` method
+                All remaning positional arguments will be passed to
+                the underlying model's ``__init__`` method
 
             config: (`optional`) one of:
-                    - an instance of a class derived from :class:`~transformers.PretrainedConfig`, or
-                    - a string valid as input to :func:`~transformers.PretrainedConfig.from_pretrained()`
+                    - an instance of a class derived from
+                      :class:`~transformers.PretrainedConfig`, or
+                    - a string valid as input to
+                      :func:`~transformers.PretrainedConfig.from_pretrained()`
 
-                Configuration for the model to use instead of an automatically loaded configuation. Configuration can be automatically loaded when:
-                    - the model is a model provided by the library (loaded with the ``shortcut-name`` string of a pretrained model), or
-                    - the model was saved using :func:`~transformers.PreTrainedModel.save_pretrained` and is reloaded by suppling the save directory.
-                    - the model is loaded by suppling a local directory as ``pretrained_model_name_or_path`` and a configuration JSON file named `config.json` is found in the directory.
+                Configuration for the model to use instead of an
+                automatically loaded configuation. Configuration can
+                be automatically loaded when:
+                    - the model is a model provided by the library
+                      (loaded with the ``shortcut-name`` string of a
+                      pretrained model), or
+                    - the model was saved using
+                      :func:`~transformers.PreTrainedModel.save_pretrained`
+                      and is reloaded by suppling the save directory.
+                    - the model is loaded by suppling a local
+                      directory as ``pretrained_model_name_or_path``
+                      and a configuration JSON file named
+                      `config.json` is found in the directory.
 
             from_pt: (`optional`) boolean, default False:
-                Load the model weights from a PyTorch state_dict save file (see docstring of pretrained_model_name_or_path argument).
+                Load the model weights from a PyTorch state_dict save
+                file (see docstring of pretrained_model_name_or_path
+                argument).
 
             cache_dir: (`optional`) string:
-                Path to a directory in which a downloaded pre-trained model
-                configuration should be cached if the standard cache should not be used.
+                Path to a directory in which a downloaded pre-trained
+                model configuration should be cached if the standard
+                cache should not be used.
 
             force_download: (`optional`) boolean, default False:
-                Force to (re-)download the model weights and configuration files and override the cached versions if they exists.
+                Force to (re-)download the model weights and
+                configuration files and override the cached versions
+                if they exists.
 
             resume_download: (`optional`) boolean, default False:
-                Do not delete incompletely recieved file. Attempt to resume the download if such a file exists.
+                Do not delete incompletely recieved file. Attempt to
+                resume the download if such a file exists.
 
             proxies: (`optional`) dict, default None:
-                A dictionary of proxy servers to use by protocol or endpoint, e.g.: {'http': 'foo.bar:3128', 'http://hostname': 'foo.bar:4012'}.
-                The proxies are used on each request.
+                A dictionary of proxy servers to use by protocol or
+                endpoint, e.g.: {'http': 'foo.bar:3128',
+                'http://hostname': 'foo.bar:4012'}.  The proxies are
+                used on each request.
 
             output_loading_info: (`optional`) boolean:
-                Set to ``True`` to also return a dictionnary containing missing keys, unexpected keys and error messages.
+                Set to ``True`` to also return a dictionnary
+                containing missing keys, unexpected keys and error
+                messages.
 
             kwargs: (`optional`) Remaining dictionary of keyword arguments:
-                Can be used to update the configuration object (after it being loaded) and initiate the model. (e.g. ``output_attention=True``). Behave differently depending on whether a `config` is provided or automatically loaded:
+                Can be used to update the configuration object (after
+                it being loaded) and initiate the
+                model. (e.g. ``output_attention=True``). Behave
+                differently depending on whether a `config` is
+                provided or automatically loaded:
 
-                - If a configuration is provided with ``config``, ``**kwargs`` will be directly passed to the underlying model's ``__init__`` method (we assume all relevant updates to the configuration have already been done)
-                - If a configuration is not provided, ``kwargs`` will be first passed to the configuration class initialization function (:func:`~transformers.PretrainedConfig.from_pretrained`). Each key of ``kwargs`` that corresponds to a configuration attribute will be used to override said attribute with the supplied ``kwargs`` value. Remaining keys that do not correspond to any configuration attribute will be passed to the underlying model's ``__init__`` function.
+                - If a configuration is provided with ``config``,
+                  ``**kwargs`` will be directly passed to the
+                  underlying model's ``__init__`` method (we assume
+                  all relevant updates to the configuration have
+                  already been done)
 
-        Examples::
-
-            # For example purposes. Not runnable.
-            model = BertModel.from_pretrained('bert-base-uncased')    # Download model and configuration from S3 and cache.
-            model = BertModel.from_pretrained('./test/saved_model/')  # E.g. model was saved using `save_pretrained('./test/saved_model/')`
-            model = BertModel.from_pretrained('bert-base-uncased', output_attention=True)  # Update configuration during loading
-            assert model.config.output_attention == True
-            # Loading from a TF checkpoint file instead of a PyTorch model (slower)
-            config = BertConfig.from_json_file('./tf_model/my_tf_model_config.json')
-            model = BertModel.from_pretrained('./tf_model/my_tf_checkpoint.ckpt.index', from_pt=True, config=config)
-
+                - If a configuration is not provided, ``kwargs`` will
+                  be first passed to the configuration class
+                  initialization function
+                  (:func:`~transformers.PretrainedConfig.from_pretrained`). Each
+                  key of ``kwargs`` that corresponds to a
+                  configuration attribute will be used to override
+                  said attribute with the supplied ``kwargs``
+                  value. Remaining keys that do not correspond to any
+                  configuration attribute will be passed to the
+                  underlying model's ``__init__`` function.
         """
+        print('**** CALLLED!! ****', pretrained_model_name_or_path)
         config = kwargs.pop("config", None)
         cache_dir = kwargs.pop("cache_dir", None)
         from_pt = kwargs.pop("from_pt", False)
@@ -463,21 +498,24 @@ class TFPreTrainedModel(tf.keras.Model, TFModelUtilsMixin, TFGenerationMixin):
             elif os.path.isfile(pretrained_model_name_or_path + ".index"):
                 archive_file = pretrained_model_name_or_path + ".index"
             else:
+
                 archive_file = hf_bucket_url(
                     pretrained_model_name_or_path,
-                    filename=(WEIGHTS_NAME if from_pt else TF2_WEIGHTS_NAME),
+                    filename = (WEIGHTS_NAME if from_pt else TF2_WEIGHTS_NAME),
                     use_cdn=use_cdn,
                 )
+                print('archive_file', archive_file)
 
+            # Weird code.
             try:
                 # Load from URL or cache if already cached
                 resolved_archive_file = cached_path(
                     archive_file,
-                    cache_dir=cache_dir,
-                    force_download=force_download,
-                    proxies=proxies,
-                    resume_download=resume_download,
-                    local_files_only=local_files_only,
+                    cache_dir = cache_dir,
+                    force_download = force_download,
+                    proxies = proxies,
+                    resume_download = resume_download,
+                    local_files_only = local_files_only,
                 )
                 if resolved_archive_file is None:
                     raise EnvironmentError
@@ -494,7 +532,8 @@ class TFPreTrainedModel(tf.keras.Model, TFModelUtilsMixin, TFGenerationMixin):
                 logger.info("loading weights file {} from cache at {}".format(archive_file, resolved_archive_file))
         else:
             resolved_archive_file = None
-
+        print('resolved_archive_file', resolved_archive_file)
+        print('config', config)
         # Instantiate model.
         model = cls(config, *model_args, **model_kwargs)
 

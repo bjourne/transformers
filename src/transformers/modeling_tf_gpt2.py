@@ -69,23 +69,19 @@ class TFAttention(Layer):
             initializer_range=config.initializer_range, name="c_proj")
         self.attn_dropout = Dropout(config.attn_pdrop)
         self.resid_dropout = Dropout(config.resid_pdrop)
-        self.pruned_heads = set()
-
-    def prune_heads(self, heads):
-        pass
 
     @staticmethod
     def causal_attention_mask(nd, ns, dtype):
         """1's in the lower triangle, counting from the lower right
-        corner. Same as tf.matrix_band_part(tf.ones([nd, ns]), -1, ns-nd),
-        but doesn't produce garbage on TPUs.
+        corner. Same as tf.matrix_band_part(tf.ones([nd, ns]), -1,
+        ns-nd), but doesn't produce garbage on TPUs.
         """
         i = tf.range(nd)[:, None]
         j = tf.range(ns)
         m = i >= j - ns + nd
         return tf.cast(m, dtype)
 
-    def _attn(self, q, k, v, attention_mask, training):
+    def _attn(self, q, k, v, training):
         # q, k, v have shape [batch, heads, sequence, features]
         w = tf.matmul(q, k, transpose_b = True)
         if self.scale:
@@ -102,11 +98,7 @@ class TFAttention(Layer):
         # Is it necessary to multiply w with b?
         w = w * b - 1e4 * (1 - b)
 
-        if attention_mask is not None:
-            # Apply the attention mask
-            w = w + attention_mask
-
-        w = tf.nn.softmax(w, axis=-1)
+        w = tf.nn.softmax(w, axis = -1)
         w = self.attn_dropout(w, training = training)
 
         return tf.matmul(w, v)
@@ -125,7 +117,7 @@ class TFAttention(Layer):
         # (batch, head, seq_length, head_features)
         return tf.transpose(x, (0, 2, 1, 3))
 
-    def call(self, x, layer_past, attention_mask, use_cache, training):
+    def call(self, x, layer_past, training):
 
         x = self.c_attn(x)
         q, k, value = tf.split(x, 3, axis=2)
@@ -137,14 +129,9 @@ class TFAttention(Layer):
             k = tf.concat([past_k, k], axis=-2)
             value = tf.concat([past_value, value], axis=-2)
 
-        # to cope with keras serialization
-        if cast_bool_to_primitive(use_cache, True) is True:
-            present = tf.stack([k, value], axis = 0)
-        else:
-            present = (None,)
+        present = tf.stack([k, value], axis = 0)
 
-        a = self._attn(q, k, value, attention_mask, training)
-
+        a = self._attn(q, k, value, training)
         a = self.merge_heads(a)
         a = self.c_proj(a)
         a = self.resid_dropout(a, training = training)
@@ -167,7 +154,7 @@ class TFMLP(Layer):
         self.act = gelu
         self.dropout = Dropout(config.resid_pdrop)
 
-    def call(self, x, training = False):
+    def call(self, x, training):
         h = self.act(self.c_fc(x))
         h2 = self.c_proj(h)
         h2 = self.dropout(h2, training = training)
@@ -187,9 +174,7 @@ class TFBlock(Layer):
             name="ln_2")
         self.mlp = TFMLP(4 * nx, config, name="mlp")
 
-    def call(self, x, layer_past,
-             attention_mask, head_mask, use_cache,
-             training):
+    def call(self, x, layer_past, training):
         '''
         0. Input
         1. LayerNormalization
@@ -201,15 +186,13 @@ class TFBlock(Layer):
         '''
         a = self.ln_1(x)
 
-        a, present = self.attn(a, layer_past, attention_mask,
-                                use_cache, training)
+        a, present = self.attn(a, layer_past, training)
         x = x + a
 
         m = self.ln_2(x)
-        m = self.mlp(m, training=training)
+        m = self.mlp(m, training)
         x = x + m
-
-        return [x, present]
+        return x, present
 
 class TFGPT2MainLayer(Layer):
     config_class = GPT2Config
@@ -258,36 +241,17 @@ class TFGPT2MainLayer(Layer):
         self,
         inputs,
         past = None,
-        attention_mask = None,
-        token_type_ids = None,
         position_ids = None,
         inputs_embeds = None,
-        use_cache = None,
-        # output_attentions = None,
-        # output_hidden_states = None,
         training = False):
         if isinstance(inputs, (dict, BatchEncoding)):
             input_ids = inputs.get("input_ids")
             past = inputs.get("past", past)
-            attention_mask = inputs.get("attention_mask", attention_mask)
-            token_type_ids = inputs.get("token_type_ids", token_type_ids)
             position_ids = inputs.get("position_ids", position_ids)
             inputs_embeds = inputs.get("inputs_embeds", inputs_embeds)
-            use_cache = inputs.get("use_cache", use_cache)
-            # output_attentions = inputs.get("output_attentions", output_attentions)
-            # output_hidden_states = inputs.get("output_hidden_states", output_hidden_states)
             assert len(inputs) <= 10, "Too many inputs."
         else:
             input_ids = inputs
-
-        # if output_attentions is None:
-        #     output_attentions = self.output_attentions
-
-        # if output_hidden_states is None:
-        #     output_hidden_states = self.output_hidden_states
-
-        if use_cache is None:
-            use_cache = self.use_cache
 
         if input_ids is not None and inputs_embeds is not None:
             raise ValueError(
@@ -302,89 +266,42 @@ class TFGPT2MainLayer(Layer):
             raise ValueError(
                 "You have to specify either input_ids or inputs_embeds")
 
-        # print('output', output_attentions)
-
         if past is None:
             past_length = 0
             past = [None] * len(self.h)
         else:
             past_length = shape_list(past[0][0])[-2]
         if position_ids is None:
-            position_ids = tf.range(past_length, input_shape[-1] + past_length, dtype=tf.int32)[tf.newaxis, :]
-
-        if attention_mask is not None:
-            # We create a 3D attention mask from a 2D tensor mask.
-            # Sizes are [batch_size, 1, 1, to_seq_length]
-            # So we can broadcast to [batch_size, num_heads,
-            # from_seq_length, to_seq_length] this attention mask is
-            # more simple than the triangular masking of causal
-            # attention used in OpenAI GPT, we just need to prepare
-            # the broadcast dimension here.
-            attention_mask = attention_mask[:, tf.newaxis, tf.newaxis, :]
-
-            # Since attention_mask is 1.0 for positions we want to
-            # attend and 0.0 for masked positions, this operation will
-            # create a tensor which is 0.0 for positions we want to
-            # attend and -10000.0 for masked positions.  Since we are
-            # adding it to the raw scores before the softmax, this is
-            # effectively the same as removing these entirely.
-
-            attention_mask = tf.cast(attention_mask, tf.float32)
-            attention_mask = (1.0 - attention_mask) * -10000.0
-        else:
-            attention_mask = None
-
-        print('use cache', use_cache)
+            position_ids = tf.range(past_length,
+                                    input_shape[-1] + past_length,
+                                    dtype = tf.int32)[tf.newaxis, :]
 
         # Prepare head mask if needed
         # 1.0 in head_mask indicate we keep the head
         # attention_probs has shape bsz x n_heads x N x N
-        # input head_mask has shape [num_heads] or [num_hidden_layers x num_heads]
-        # and head_mask is converted to shape [num_hidden_layers x batch x num_heads x seq_length x seq_length]
-        # if head_mask is not None:
-        #     raise NotImplementedError
-        # else:
-        head_mask = [None] * self.num_hidden_layers
-        # head_mask = tf.constant([0] * self.num_hidden_layers)
-
-        position_ids = tf.reshape(position_ids, [-1, shape_list(position_ids)[-1]])
+        position_ids = tf.reshape(position_ids,
+                                  [-1, shape_list(position_ids)[-1]])
 
         if inputs_embeds is None:
             inputs_embeds = self.wte(input_ids, mode = "embedding")
         position_embeds = self.wpe(position_ids)
 
-        token_type_embeds = 0
-        if token_type_ids is not None:
-            shape = [-1, shape_list(token_type_ids)[-1]]
-            token_type_ids = tf.reshape(token_type_ids, shape)
-            token_type_embeds = self.wte(token_type_ids, mode="embedding")
-
-        hidden_states = inputs_embeds + position_embeds + token_type_embeds
+        hidden_states = inputs_embeds + position_embeds
         hidden_states = self.drop(hidden_states, training=training)
 
         output_shape = input_shape + [shape_list(hidden_states)[-1]]
 
         presents = ()
         for i, (block, layer_past) in enumerate(zip(self.h, past)):
-            outputs = block(hidden_states,
-                            layer_past,
-                            attention_mask,
-                            head_mask[i],
-                            use_cache,
-                            training)
-
-            hidden_states, present = outputs[:2]
+            hidden_states, present = block(hidden_states,
+                                           layer_past,
+                                           training)
             presents = presents + (present,)
 
         hidden_states = self.ln_f(hidden_states)
-
         hidden_states = tf.reshape(hidden_states, output_shape)
-        outputs = (hidden_states,)
 
-        if use_cache is True:
-            outputs = outputs + (presents,)
-        return outputs
-
+        return hidden_states, presents
 
 class TFGPT2PreTrainedModel(TFPreTrainedModel):
     """ An abstract class to handle weights initialization and
@@ -425,8 +342,6 @@ class TFGPT2LMHeadModel(TFGPT2PreTrainedModel,
         self,
         inputs,
         past = None,
-        attention_mask = None,
-        token_type_ids = None,
         position_ids = None,
         inputs_embeds = None,
         use_cache = None,
@@ -434,31 +349,7 @@ class TFGPT2LMHeadModel(TFGPT2PreTrainedModel,
         output_hidden_states=None,
         labels=None,
         training=False):
-        r"""
-        labels (:obj:`tf.Tensor` of shape :obj:`(batch_size, sequence_length)`, `optional`, defaults to :obj:`None`):
-            Labels for computing the cross entropy classification loss.
-            Indices should be in ``[0, ..., config.vocab_size - 1]``.
-
-    Return:
-        :obj:`tuple(tf.Tensor)` comprising various elements depending on the configuration (:class:`~transformers.GPT2Config`) and inputs:
-        prediction_scores (:obj:`tf.Tensor` of shape :obj:`(batch_size, sequence_length, config.vocab_size)`):
-            Prediction scores of the language modeling head (scores for each vocabulary token before SoftMax).
-        past (:obj:`List[tf.Tensor]` of length :obj:`config.n_layers` with each tensor of shape :obj:`(2, batch_size, num_heads, sequence_length, embed_size_per_head)`):
-            Contains pre-computed hidden-states (key and values in the attention blocks).
-            Can be used (see `past` input) to speed up sequential decoding. The token ids which have their past given to this model
-            should not be passed as input ids as they have already been computed.
-        hidden_states (:obj:`tuple(tf.Tensor)`, `optional`, returned when ``output_hidden_states=True`` is passed or when ``config.output_hidden_states=True``):
-            tuple of :obj:`tf.Tensor` (one for the output of the embeddings + one for the output of each layer)
-            of shape :obj:`(batch_size, sequence_length, hidden_size)`.
-
-            Hidden-states of the model at the output of each layer plus the initial embedding outputs.
-        attentions (:obj:`tuple(tf.Tensor)`, `optional`, returned when ``output_attentions=True`` is passed or when ``config.output_attentions=True``):
-            tuple of :obj:`tf.Tensor` (one for each layer) of shape
-            :obj:`(batch_size, num_heads, sequence_length, sequence_length)`:
-
-            Attentions weights after the attention softmax, used to compute the weighted average in the self-attention
-            heads.
-        """
+        use_cache = True
         if isinstance(inputs, (tuple, list)):
             labels = inputs[10] if len(inputs) > 10 else labels
             if len(inputs) > 10:
@@ -467,17 +358,11 @@ class TFGPT2LMHeadModel(TFGPT2PreTrainedModel,
             labels = inputs.pop("labels", labels)
 
         print('use cache here', use_cache)
-
         transformer_outputs = self.transformer(
             inputs,
             past = past,
-            attention_mask = attention_mask,
-            token_type_ids = token_type_ids,
             position_ids = position_ids,
             inputs_embeds = inputs_embeds,
-            use_cache = use_cache,
-            # output_attentions = output_attentions,
-            # output_hidden_states = output_hidden_states,
             training = training,
         )
 

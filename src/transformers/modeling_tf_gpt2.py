@@ -85,10 +85,9 @@ class TFAttention(Layer):
         m = i >= j - ns + nd
         return tf.cast(m, dtype)
 
-    def _attn(self, inputs, training = False):
+    def _attn(self, q, k, v, attention_mask, training):
         # q, k, v have shape [batch, heads, sequence, features]
-        q, k, v, attention_mask, head_mask, output_attentions = inputs
-        w = tf.matmul(q, k, transpose_b=True)
+        w = tf.matmul(q, k, transpose_b = True)
         if self.scale:
             # scale attention_scores
             dk = tf.cast(shape_list(k)[-1], tf.float32)
@@ -108,16 +107,9 @@ class TFAttention(Layer):
             w = w + attention_mask
 
         w = tf.nn.softmax(w, axis=-1)
-        w = self.attn_dropout(w, training=training)
+        w = self.attn_dropout(w, training = training)
 
-        # Mask heads if we want to
-        if head_mask is not None:
-            w = w * head_mask
-
-        outputs = [tf.matmul(w, v)]
-        if cast_bool_to_primitive(output_attentions) is True:
-            outputs.append(w)
-        return outputs
+        return tf.matmul(w, v)
 
     def merge_heads(self, x):
         x = tf.transpose(x, [0, 2, 1, 3])
@@ -133,9 +125,9 @@ class TFAttention(Layer):
         # (batch, head, seq_length, head_features)
         return tf.transpose(x, (0, 2, 1, 3))
 
-    def call(self, inputs, training = False):
-        x, layer_past, attention_mask, head_mask, \
-            use_cache, output_attentions = inputs
+    def call(self,
+             x, layer_past, attention_mask,
+             use_cache, output_attentions, training):
 
         x = self.c_attn(x)
         q, k, value = tf.split(x, 3, axis=2)
@@ -153,18 +145,14 @@ class TFAttention(Layer):
         else:
             present = (None,)
 
-        attn_outputs = self._attn([q, k, value,
-                                   attention_mask, head_mask,
-                                   output_attentions],
-                                  training = training)
-        a = attn_outputs[0]
+        a = self._attn(q, k, value, attention_mask, training)
 
         a = self.merge_heads(a)
         a = self.c_proj(a)
         a = self.resid_dropout(a, training=training)
 
-        outputs = [a, present] + attn_outputs[1:]
-        return outputs  # a, present, (attentions)
+        outputs = [a, present]
+        return outputs
 
 
 class TFMLP(Layer):
@@ -217,10 +205,9 @@ class TFBlock(Layer):
 
         a = self.ln_1(x)
         output_attn = self.attn(
-            [a, layer_past, attention_mask, head_mask,
-             use_cache, output_attentions],
-            training = training
-        )
+            a, layer_past, attention_mask,
+            use_cache, output_attentions,
+            training)
         # output_attn: a, present, (attentions)
         a = output_attn[0]
         x = x + a
@@ -283,7 +270,6 @@ class TFGPT2MainLayer(Layer):
         attention_mask = None,
         token_type_ids = None,
         position_ids = None,
-        head_mask = None,
         inputs_embeds = None,
         use_cache = None,
         output_attentions = None,
@@ -295,7 +281,6 @@ class TFGPT2MainLayer(Layer):
             attention_mask = inputs.get("attention_mask", attention_mask)
             token_type_ids = inputs.get("token_type_ids", token_type_ids)
             position_ids = inputs.get("position_ids", position_ids)
-            head_mask = inputs.get("head_mask", head_mask)
             inputs_embeds = inputs.get("inputs_embeds", inputs_embeds)
             use_cache = inputs.get("use_cache", use_cache)
             output_attentions = inputs.get("output_attentions", output_attentions)
@@ -325,6 +310,8 @@ class TFGPT2MainLayer(Layer):
         else:
             raise ValueError(
                 "You have to specify either input_ids or inputs_embeds")
+
+        print('output', output_attentions)
 
         if past is None:
             past_length = 0
@@ -361,11 +348,11 @@ class TFGPT2MainLayer(Layer):
         # attention_probs has shape bsz x n_heads x N x N
         # input head_mask has shape [num_heads] or [num_hidden_layers x num_heads]
         # and head_mask is converted to shape [num_hidden_layers x batch x num_heads x seq_length x seq_length]
-        if head_mask is not None:
-            raise NotImplementedError
-        else:
-            head_mask = [None] * self.num_hidden_layers
-            # head_mask = tf.constant([0] * self.num_hidden_layers)
+        # if head_mask is not None:
+        #     raise NotImplementedError
+        # else:
+        head_mask = [None] * self.num_hidden_layers
+        # head_mask = tf.constant([0] * self.num_hidden_layers)
 
         position_ids = tf.reshape(position_ids, [-1, shape_list(position_ids)[-1]])
 
@@ -471,7 +458,6 @@ class TFGPT2LMHeadModel(TFGPT2PreTrainedModel,
         attention_mask = None,
         token_type_ids = None,
         position_ids = None,
-        head_mask = None,
         inputs_embeds = None,
         use_cache = None,
         output_attentions=None,
@@ -516,7 +502,6 @@ class TFGPT2LMHeadModel(TFGPT2PreTrainedModel,
             attention_mask = attention_mask,
             token_type_ids = token_type_ids,
             position_ids = position_ids,
-            head_mask = head_mask,
             inputs_embeds = inputs_embeds,
             use_cache = use_cache,
             output_attentions = output_attentions,
@@ -526,7 +511,7 @@ class TFGPT2LMHeadModel(TFGPT2PreTrainedModel,
 
         hidden_states = transformer_outputs[0]
 
-        logits = self.transformer.wte(hidden_states, mode="linear")
+        logits = self.transformer.wte(hidden_states, mode = "linear")
 
         outputs = (logits,) + transformer_outputs[1:]
         if labels is not None:

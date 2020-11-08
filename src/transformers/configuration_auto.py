@@ -18,85 +18,18 @@
 import logging
 from collections import OrderedDict
 
-from .configuration_albert import ALBERT_PRETRAINED_CONFIG_ARCHIVE_MAP, AlbertConfig
-from .configuration_bart import BART_PRETRAINED_CONFIG_ARCHIVE_MAP, BartConfig, MBartConfig
-from .configuration_bert import BERT_PRETRAINED_CONFIG_ARCHIVE_MAP, BertConfig
-from .configuration_camembert import CAMEMBERT_PRETRAINED_CONFIG_ARCHIVE_MAP, CamembertConfig
-from .configuration_ctrl import CTRL_PRETRAINED_CONFIG_ARCHIVE_MAP, CTRLConfig
-from .configuration_distilbert import DISTILBERT_PRETRAINED_CONFIG_ARCHIVE_MAP, DistilBertConfig
-from .configuration_electra import ELECTRA_PRETRAINED_CONFIG_ARCHIVE_MAP, ElectraConfig
-from .configuration_encoder_decoder import EncoderDecoderConfig
-from .configuration_flaubert import FLAUBERT_PRETRAINED_CONFIG_ARCHIVE_MAP, FlaubertConfig
 from .configuration_gpt2 import GPT2_PRETRAINED_CONFIG_ARCHIVE_MAP, GPT2Config
-from .configuration_longformer import LONGFORMER_PRETRAINED_CONFIG_ARCHIVE_MAP, LongformerConfig
-from .configuration_marian import MarianConfig
-from .configuration_mobilebert import MobileBertConfig
 from .configuration_openai import OPENAI_GPT_PRETRAINED_CONFIG_ARCHIVE_MAP, OpenAIGPTConfig
-from .configuration_reformer import ReformerConfig
-from .configuration_retribert import RETRIBERT_PRETRAINED_CONFIG_ARCHIVE_MAP, RetriBertConfig
-from .configuration_roberta import ROBERTA_PRETRAINED_CONFIG_ARCHIVE_MAP, RobertaConfig
-from .configuration_t5 import T5_PRETRAINED_CONFIG_ARCHIVE_MAP, T5Config
-from .configuration_transfo_xl import TRANSFO_XL_PRETRAINED_CONFIG_ARCHIVE_MAP, TransfoXLConfig
 from .configuration_utils import PretrainedConfig
-from .configuration_xlm import XLM_PRETRAINED_CONFIG_ARCHIVE_MAP, XLMConfig
-from .configuration_xlm_roberta import XLM_ROBERTA_PRETRAINED_CONFIG_ARCHIVE_MAP, XLMRobertaConfig
-from .configuration_xlnet import XLNET_PRETRAINED_CONFIG_ARCHIVE_MAP, XLNetConfig
 
 
 logger = logging.getLogger(__name__)
 
 
-ALL_PRETRAINED_CONFIG_ARCHIVE_MAP = dict(
-    (key, value)
-    for pretrained_map in [
-        BERT_PRETRAINED_CONFIG_ARCHIVE_MAP,
-        BART_PRETRAINED_CONFIG_ARCHIVE_MAP,
-        OPENAI_GPT_PRETRAINED_CONFIG_ARCHIVE_MAP,
-        TRANSFO_XL_PRETRAINED_CONFIG_ARCHIVE_MAP,
-        GPT2_PRETRAINED_CONFIG_ARCHIVE_MAP,
-        CTRL_PRETRAINED_CONFIG_ARCHIVE_MAP,
-        XLNET_PRETRAINED_CONFIG_ARCHIVE_MAP,
-        XLM_PRETRAINED_CONFIG_ARCHIVE_MAP,
-        ROBERTA_PRETRAINED_CONFIG_ARCHIVE_MAP,
-        DISTILBERT_PRETRAINED_CONFIG_ARCHIVE_MAP,
-        ALBERT_PRETRAINED_CONFIG_ARCHIVE_MAP,
-        CAMEMBERT_PRETRAINED_CONFIG_ARCHIVE_MAP,
-        T5_PRETRAINED_CONFIG_ARCHIVE_MAP,
-        XLM_ROBERTA_PRETRAINED_CONFIG_ARCHIVE_MAP,
-        FLAUBERT_PRETRAINED_CONFIG_ARCHIVE_MAP,
-        ELECTRA_PRETRAINED_CONFIG_ARCHIVE_MAP,
-        LONGFORMER_PRETRAINED_CONFIG_ARCHIVE_MAP,
-        RETRIBERT_PRETRAINED_CONFIG_ARCHIVE_MAP,
-    ]
-    for key, value, in pretrained_map.items()
-)
-
-
 CONFIG_MAPPING = OrderedDict(
     [
-        ("retribert", RetriBertConfig,),
-        ("t5", T5Config,),
-        ("mobilebert", MobileBertConfig,),
-        ("distilbert", DistilBertConfig,),
-        ("albert", AlbertConfig,),
-        ("camembert", CamembertConfig,),
-        ("xlm-roberta", XLMRobertaConfig,),
-        ("marian", MarianConfig,),
-        ("mbart", MBartConfig,),
-        ("bart", BartConfig,),
-        ("reformer", ReformerConfig,),
-        ("longformer", LongformerConfig,),
-        ("roberta", RobertaConfig,),
-        ("flaubert", FlaubertConfig,),
-        ("bert", BertConfig,),
         ("openai-gpt", OpenAIGPTConfig,),
         ("gpt2", GPT2Config,),
-        ("transfo-xl", TransfoXLConfig,),
-        ("xlnet", XLNetConfig,),
-        ("xlm", XLMConfig,),
-        ("ctrl", CTRLConfig,),
-        ("electra", ElectraConfig,),
-        ("encoder-decoder", EncoderDecoderConfig,),
     ]
 )
 
